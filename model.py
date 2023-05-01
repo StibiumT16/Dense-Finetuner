@@ -6,13 +6,16 @@ sys.path += ['./']
 import torch
 from torch import nn
 import transformers
-if int(transformers.__version__[0]) <=3:
-    from transformers.modeling_roberta import RobertaPreTrainedModel
-else:
-    from transformers.models.roberta.modeling_roberta import RobertaPreTrainedModel
-from transformers import RobertaModel
+from transformers.models.roberta.modeling_roberta import RobertaPreTrainedModel
+from transformers import RobertaModel, BertPreTrainedModel, BertModel, BertConfig
 import torch.nn.functional as F
 from torch.cuda.amp import autocast
+
+def mean_pooling(model_output, attention_mask):
+    token_embeddings = model_output.last_hidden_state
+    input_mask_expanded = attention_mask.unsqueeze(-1).expand(token_embeddings.size()).float()
+    return torch.sum(token_embeddings * input_mask_expanded, 1) / torch.clamp(input_mask_expanded.sum(1), min=1e-9)
+    
 
 class EmbeddingMixin:
     """
@@ -24,7 +27,7 @@ class EmbeddingMixin:
             self.use_mean = False
         else:
             self.use_mean = model_argobj.use_mean
-        print("Using mean:", self.use_mean)
+        print("top level Using mean:", self.use_mean)
 
     def _init_weights(self, module):
         """ Initialize the weights """
@@ -58,23 +61,19 @@ class BaseModelDot(EmbeddingMixin):
         # TODO should raise NotImplementedError
         # temporarily do this  
         return None 
-
+    
     def query_emb(self, input_ids, attention_mask):
-        outputs1 = self._text_encode(input_ids=input_ids,
-                                attention_mask=attention_mask)
+        outputs1 = self._text_encode(input_ids=input_ids, attention_mask=attention_mask)
         full_emb = self.masked_mean_or_first(outputs1, attention_mask)
         query1 = self.norm(self.embeddingHead(full_emb))
         return query1
-
+    
     def body_emb(self, input_ids, attention_mask):
         return self.query_emb(input_ids, attention_mask)
 
-    def forward(self, input_ids, attention_mask, is_query, *args):
+    def forward(self, input_ids, attention_mask, *args):
         assert len(args) == 0
-        if is_query:
-            return self.query_emb(input_ids, attention_mask)
-        else:
-            return self.body_emb(input_ids, attention_mask)
+        return self.query_emb(input_ids, attention_mask)
 
 
 class RobertaDot(BaseModelDot, RobertaPreTrainedModel):
@@ -122,6 +121,44 @@ class RobertaDot_Rand(RobertaDot):
             other_doc_ids, other_doc_attention_mask,
             hard_pair_mask)
 
+
+class BertDot(BertPreTrainedModel):
+    def __init__(self, config : BertConfig, use_mean, use_cos=False):
+        BertPreTrainedModel.__init__(self, config)
+        self.bert = BertModel(config, add_pooling_layer=False)
+        self.use_mean = use_mean
+        self.use_cos=use_cos
+        print("BERT Using mean:", self.use_mean)
+    
+    def text_embeds(self, input_ids, attention_mask, return_dict=False):
+        outputs = self.bert(input_ids=input_ids, attention_mask=attention_mask, return_dict=True)
+        if self.use_mean:
+            embeds = mean_pooling(outputs, attention_mask)
+        else:
+            embeds = outputs.last_hidden_state[:, 0]
+        
+        if self.use_cos:
+            embeds = F.normalize(embeds, p=2, dim=1) 
+        
+        if return_dict:
+            outputs.embedding = embeds
+            return outputs
+        else:
+            return embeds
+
+    def forward(self, input_ids, attention_mask, return_dict=False):
+        return self.text_embeds(input_ids, attention_mask, return_dict)
+        
+class BertDot_InBatch(BertDot):
+    def forward(self, input_query_ids, query_attention_mask,
+            input_doc_ids, doc_attention_mask, 
+            other_doc_ids=None, other_doc_attention_mask=None,
+            rel_pair_mask=None, hard_pair_mask=None):
+        return inbatch_train(self.text_embeds, self.text_embeds,
+            input_query_ids, query_attention_mask,
+            input_doc_ids, doc_attention_mask, 
+            other_doc_ids, other_doc_attention_mask,
+            rel_pair_mask, hard_pair_mask)
 
 def inbatch_train(query_encode_func, doc_encode_func,
             input_query_ids, query_attention_mask,
