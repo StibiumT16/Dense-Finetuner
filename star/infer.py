@@ -8,12 +8,12 @@ import logging
 import os
 import numpy as np
 import torch
-from transformers import BertConfig
+from transformers import BertConfig, RobertaConfig, T5EncoderModel
 from tqdm import tqdm
 from torch.utils.data.dataloader import DataLoader
 from torch.utils.data.sampler import SequentialSampler
 
-from model import BertDot
+from model import BertDot, RobertaDot, T5Dot
 from dataset import (
     TextTokenIdsCache, load_rel, SubsetSeqDataset, SequenceDataset,
     single_get_collate_function
@@ -81,6 +81,7 @@ def query_inference(model, args, embedding_size):
         subprocess.check_call(["rm", args.queryids_memmap_path])
         raise
 
+
 def doc_inference(model, args, embedding_size):
     if os.path.exists(args.doc_memmap_path):
         print(f"{args.doc_memmap_path} exists, skip inference")
@@ -108,24 +109,28 @@ def doc_inference(model, args, embedding_size):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--data_type", choices=["passage", 'doc','nq320k'], type=str, required=True)
+    parser.add_argument("--data_type", type=str, required=True)
+    parser.add_argument("--model_type", type=str, choices=['t5', 'bert', 'roberta'],required=True)
+    parser.add_argument("--model_name_or_path", type=str, required=True)
+    parser.add_argument("--run_name", type=str, required=True)
     parser.add_argument("--max_query_length", type=int, default=32)
     parser.add_argument("--max_doc_length", type=int, default=512)
-    parser.add_argument("--eval_batch_size", type=int, default=128)
+    parser.add_argument("--eval_batch_size", type=int, default=32)
     parser.add_argument("--mode", type=str, choices=["train", "dev", "test", "lead"], required=True)
     parser.add_argument("--topk", type=int, default=100)
     parser.add_argument("--no_cuda", action="store_true")
     parser.add_argument("--faiss_gpus", type=int, default=None, nargs="+")
+    parser.add_argument("--use_mean", action="store_true")
+    parser.add_argument("--use_cos", action="store_true")
     args = parser.parse_args()
 
     args.device = torch.device(
         "cuda" if torch.cuda.is_available() and not args.no_cuda else "cpu")
     args.n_gpu = torch.cuda.device_count()
     
-    args.preprocess_dir = f"./data/{args.data_type}_cocondenser/preprocess"
-    args.model_path = f"Luyu/co-condenser-marco"
-    # args.model_path = f"./data/{args.data_type}_cocondenser/star_train/models"
-    args.output_dir = f"./data/{args.data_type}_cocondenser/evaluate/star"
+    args.preprocess_dir = f"./data/{args.data_type}_{args.run_name}/preprocess"
+    #args.model_path = f"./data/{args.data_type}_{args.run_name}/star_train/models"
+    args.output_dir = f"./data/{args.data_type}_{args.run_name}/evaluate/star"
     args.query_memmap_path = os.path.join(args.output_dir, f"{args.mode}-query.memmap")
     args.queryids_memmap_path = os.path.join(args.output_dir, f"{args.mode}-query-id.memmap")
     args.output_rank_file = os.path.join(args.output_dir, f"{args.mode}.rank.tsv")
@@ -133,10 +138,20 @@ def main():
     args.docid_memmap_path = os.path.join(args.output_dir, "passages-id.memmap")
     logger.info(args)
     os.makedirs(args.output_dir, exist_ok=True)
-
-    config = BertConfig.from_pretrained(args.model_path, gradient_checkpointing=False)
-    model = BertDot.from_pretrained(args.model_path, config=config, use_mean=False)
-    output_embedding_size = config.hidden_size
+    
+    if args.model_type == 'bert':
+        config = BertConfig.from_pretrained(args.model_name_or_path)
+        model = BertDot.from_pretrained(args.model_name_or_path, config=config, use_mean=args.use_mean, use_cos=args.use_cos)
+        output_embedding_size = config.hidden_size
+    elif args.model_type == 'roberta':
+        config = RobertaConfig.from_pretrained(args.model_name_or_path)
+        model = RobertaDot.from_pretrained(args.model_name_or_path, config=config)
+        output_embedding_size = config.hidden_size
+    elif args.model_type == 't5':
+        pretrained_model = T5EncoderModel.from_pretrained(args.model_name_or_path)
+        model = T5Dot(pretrained_model, use_mean=args.use_mean, use_cos=args.use_cos)
+        output_embedding_size = pretrained_model.config.d_model
+        
     model = model.to(args.device)
     query_inference(model, args, output_embedding_size)
     doc_inference(model, args, output_embedding_size)

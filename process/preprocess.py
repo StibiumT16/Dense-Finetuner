@@ -16,7 +16,7 @@ import argparse
 import json
 from tqdm import tqdm
 # from star_tokenizer import RobertaTokenizer
-from transformers import AutoTokenizer
+from transformers import RobertaTokenizer
 
 
 def pad_input_ids(input_ids, max_length,
@@ -37,7 +37,8 @@ def pad_input_ids(input_ids, max_length,
 
 
 def tokenize_to_file(args, in_path, output_dir, line_fn, max_length, begin_idx, end_idx):
-    tokenizer = AutoTokenizer.from_pretrained(args.model_name_or_path)
+    tokenizer = RobertaTokenizer.from_pretrained(
+        args.model_name_or_path, do_lower_case = True, cache_dir=None)
     os.makedirs(output_dir, exist_ok=True)
     data_cnt = end_idx - begin_idx
     ids_array = np.memmap(
@@ -401,7 +402,7 @@ def get_arguments():
 
     parser.add_argument(
         "--model_name_or_path",
-        default="sentence-transformers/msmarco-bert-base-dot-v5",
+        default="roberta-base",
         type=str,
     )
     parser.add_argument(
@@ -446,8 +447,8 @@ def main():
         args.data_dir = "./data/passage/dataset"
         args.out_data_dir = "./data/passage/preprocess"
     else:
-        args.data_dir = "./data/nq320k_sbert/dataset"
-        args.out_data_dir = "./data/nq320k_sbert/preprocess"
+        args.data_dir = "./data/nq320k/dataset"
+        args.out_data_dir = "./data/nq320k/preprocess"
     if not os.path.exists(args.out_data_dir):
         os.makedirs(args.out_data_dir)
     preprocess(args)

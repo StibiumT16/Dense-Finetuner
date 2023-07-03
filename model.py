@@ -7,7 +7,7 @@ import torch
 from torch import nn
 import transformers
 from transformers.models.roberta.modeling_roberta import RobertaPreTrainedModel
-from transformers import RobertaModel, BertPreTrainedModel, BertModel, BertConfig
+from transformers import RobertaModel, BertPreTrainedModel, BertModel, BertConfig, T5Config, T5EncoderModel
 import torch.nn.functional as F
 from torch.cuda.amp import autocast
 
@@ -159,6 +159,47 @@ class BertDot_InBatch(BertDot):
             input_doc_ids, doc_attention_mask, 
             other_doc_ids, other_doc_attention_mask,
             rel_pair_mask, hard_pair_mask)
+
+class T5Dot(T5EncoderModel):
+    def __init__(self, encoder, use_mean, use_cos=False):
+        T5EncoderModel.__init__(self, encoder.config)
+        self.encoder = encoder
+        self.use_mean = use_mean
+        self.use_cos=use_cos
+        print("T5 encoder Using mean:", self.use_mean)
+    
+    def text_embeds(self, input_ids, attention_mask, return_dict=False):
+        outputs = self.encoder(input_ids=input_ids, attention_mask=attention_mask, return_dict=True)
+        if self.use_mean:
+            embeds = mean_pooling(outputs, attention_mask)
+        else:
+            embeds = outputs.last_hidden_state[:, -1]
+        
+        if self.use_cos:
+            embeds = F.normalize(embeds, p=2, dim=1) 
+        
+        if return_dict:
+            outputs.embedding = embeds
+            return outputs
+        else:
+            return embeds
+
+    def forward(self, input_ids, attention_mask, return_dict=False):
+        return self.text_embeds(input_ids, attention_mask, return_dict)
+        
+        
+        
+class T5Dot_InBatch(T5Dot):
+    def forward(self, input_query_ids, query_attention_mask,
+            input_doc_ids, doc_attention_mask, 
+            other_doc_ids=None, other_doc_attention_mask=None,
+            rel_pair_mask=None, hard_pair_mask=None):
+        return inbatch_train(self.text_embeds, self.text_embeds,
+            input_query_ids, query_attention_mask,
+            input_doc_ids, doc_attention_mask, 
+            other_doc_ids, other_doc_attention_mask,
+            rel_pair_mask, hard_pair_mask)
+
 
 def inbatch_train(query_encode_func, doc_encode_func,
             input_query_ids, query_attention_mask,

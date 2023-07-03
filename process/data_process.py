@@ -4,10 +4,8 @@ import sys
 sys.path += ['./']
 import os
 import torch
-import gzip
 import pickle
 import subprocess
-import csv
 import multiprocessing
 import numpy as np
 from os import listdir
@@ -15,7 +13,6 @@ from os.path import isfile, join
 import argparse
 import json
 from tqdm import tqdm
-# from star_tokenizer import RobertaTokenizer
 from transformers import AutoTokenizer
 
 
@@ -170,10 +167,7 @@ def write_query_rel(args, pid2offset, qid2offset_file, query_file, positive_id_f
         for line in open(query_positive_id_path, 'r', encoding='utf8'):
             topicid, _, docid, rel = line.split()
             topicid = int(topicid)
-            if args.data_type == 0:
-                docid = int(docid[1:])
-            else:
-                docid = int(docid)
+            docid = int(docid)
             qrel_output.write(str(qid2offset[topicid]) +
                          "\t0\t" + str(pid2offset[docid]) +
                          "\t" + rel + "\n")
@@ -184,21 +178,10 @@ def write_query_rel(args, pid2offset, qid2offset_file, query_file, positive_id_f
 def preprocess(args):
     
     pid2offset = {}
-    if args.data_type == 0:
-        in_passage_path = os.path.join(
-            args.data_dir,
-            "msmarco-docs.tsv",
-        )
-    elif args.data_type == 1:
-        in_passage_path = os.path.join(
-            args.data_dir,
-            "corpus.tsv",
-        )
-    else:
-        in_passage_path = os.path.join(
-            args.data_dir,
-            "corpus.tsv",
-        )
+    in_passage_path = os.path.join(
+        args.data_dir,
+        "corpus.tsv",
+    )
 
     out_passage_path = os.path.join(
         args.out_data_dir,
@@ -260,114 +243,30 @@ def preprocess(args):
     
     print("done saving pid2offset")
     
-    if args.data_type == 0:
-        write_query_rel(
-            args,
-            pid2offset,
-            "train-qid2offset.pickle",
-            "msmarco-doctrain-queries.tsv",
-            "msmarco-doctrain-qrels.tsv",
-            "train-query",
-            "train-qrel.tsv")     
-        write_query_rel(
-            args,
-            pid2offset,
-            "test-qid2offset.pickle",
-            "msmarco-test2019-queries.tsv",
-            "2019qrels-docs.txt",
-            "test-query",
-            "test-qrel.tsv")
-        write_query_rel(
-            args,
-            pid2offset,
-            "dev-qid2offset.pickle",
-            "msmarco-docdev-queries.tsv",
-            "msmarco-docdev-qrels.tsv",
-            "dev-query",
-            "dev-qrel.tsv")
-        write_query_rel(
-            args,
-            pid2offset,
-            "lead-qid2offset.pickle",
-            "docleaderboard-queries.tsv",
-            None,
-            "lead-query",
-            None)
-    elif args.data_type == 1:
-        write_query_rel(
-            args,
-            pid2offset,
-            "train-qid2offset.pickle",
-            "queries.train.tsv",
-            "qrels.train.tsv",
-            "train-query",
-            "train-qrel.tsv")   
-        write_query_rel(
-            args,
-            pid2offset,
-            "dev-qid2offset.pickle",
-            "queries.dev.small.tsv",
-            "qrels.dev.small.tsv",
-            "dev-query",
-            "dev-qrel.tsv")
-        #write_query_rel(
-        #    args,
-        #    pid2offset,
-        #    "test-qid2offset.pickle",
-        #    "msmarco-test2019-queries.tsv",
-        #    "2019qrels-pass.txt",
-        #    "test-query",
-        #    "test-qrel.tsv")
-        #write_query_rel(
-        #    args,
-        #    pid2offset,
-        #    "lead-qid2offset.pickle",
-        #    "queries.eval.small.tsv",
-        #    None,
-        #    "lead-query",
-        #    None)
-    else:
-        write_query_rel(
-            args,
-            pid2offset,
-            "train-qid2offset.pickle",
-            "query.train",
-            "qrels.train",
-            "train-query",
-            "train-qrel.tsv")   
-        write_query_rel(
-            args,
-            pid2offset,
-            "dev-qid2offset.pickle",
-            "query.dev",
-            "qrels.dev",
-            "dev-query",
-            "dev-qrel.tsv")
+    write_query_rel(
+        args,
+        pid2offset,
+        "train-qid2offset.pickle",
+        "query.train.tsv",
+        "qrels.train.tsv",
+        "train-query",
+        "train-qrel.tsv")   
+    write_query_rel(
+        args,
+        pid2offset,
+        "dev-qid2offset.pickle",
+        "query.dev.tsv",
+        "qrels.dev.tsv",
+        "dev-query",
+        "dev-qrel.tsv")
 
 
 def PassagePreprocessingFn(args, line, tokenizer):
-    if args.data_type == 0:
-        line_arr = line.split('\t')
-        p_id = int(line_arr[0][1:])  # remove "D"
+    line = line.strip()
+    line_arr = line.split('\t')
+    p_id = int(line_arr[0])
 
-        url = line_arr[1].rstrip()
-        title = line_arr[2].rstrip()
-        p_text = line_arr[3].rstrip()
-        # NOTE: This linke is copied from ANCE, 
-        # but I think it's better to use <s> as the separator, 
-        full_text = url + "<sep>" + title + "<sep>" + p_text
-        # keep only first 10000 characters, should be sufficient for any
-        # experiment that uses less than 500 - 1k tokens
-        full_text = full_text[:args.max_doc_character]
-    else:
-        line = line.strip()
-        line_arr = line.split('\t')
-        p_id = int(line_arr[0])
-
-        p_text = line_arr[1].rstrip()
-        # keep only first 10000 characters, should be sufficient for any
-        # experiment that uses less than 500 - 1k tokens
-        full_text = p_text[:args.max_doc_character]
+    full_text = line_arr[1].rstrip()
         
     passage = tokenizer.encode(
         full_text,
@@ -401,7 +300,7 @@ def get_arguments():
 
     parser.add_argument(
         "--model_name_or_path",
-        default="Luyu/co-condenser-marco",
+        default="sentence-transformers/msmarco-bert-base-dot-v5",
         type=str,
     )
     parser.add_argument(
@@ -419,16 +318,14 @@ def get_arguments():
         "than this will be truncated, sequences shorter will be padded.",
     )
     parser.add_argument(
-        "--max_doc_character",
-        default=10000,
-        type=int,
-        help="used before tokenizer to save tokenizer latency",
+        "--data_type",
+        default="nq320k",
+        type=str,
     )
     parser.add_argument(
-        "--data_type",
-        default=1,
-        type=int,
-        help="0 for doc, 1 for passage",
+        "--run_name",
+        default="bert",
+        type=str,
     )
     parser.add_argument("--threads", type=int, default=32)
 
@@ -439,15 +336,8 @@ def get_arguments():
 
 def main():
     args = get_arguments()
-    if args.data_type == 0:
-        args.data_dir = "./data/doc_cocondenser/dataset"
-        args.out_data_dir = "./data/doc_cocondenser/preprocess"
-    elif args.data_type == 1:
-        args.data_dir = "./data/passage_cocondenser/dataset"
-        args.out_data_dir = "./data/passage_cocondenser/preprocess"
-    else:
-        args.data_dir = "./data/nq320k_cocondenser/dataset"
-        args.out_data_dir = "./data/nq320k_cocondenser/preprocess"
+    args.data_dir = f"./data/{args.data_type}_{args.run_name}/dataset"
+    args.out_data_dir = f"./data/{args.data_type}_{args.run_name}/preprocess"
     if not os.path.exists(args.out_data_dir):
         os.makedirs(args.out_data_dir)
     preprocess(args)

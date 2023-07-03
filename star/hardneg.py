@@ -9,22 +9,32 @@ import logging
 import numpy as np
 import torch
 import subprocess
-from transformers import BertConfig
 from tqdm import tqdm
-from model import BertDot
+from model import BertDot, RobertaDot, T5Dot
+from transformers import BertConfig, RobertaConfig, T5EncoderModel
 from dataset import load_rank, load_rel
 from retrieve_utils import (
     construct_flatindex_from_embeddings, 
     index_retrieve, convert_index_to_gpu
 )
-from star.sbert_inference import doc_inference, query_inference
+from star.infer import doc_inference, query_inference
 logger = logging.Logger(__name__)
 
 
 def retrieve_top(args):
-    config = BertConfig.from_pretrained(args.model_path, gradient_checkpointing=False)
-    model = BertDot.from_pretrained(args.model_path, config=config, use_mean=True)
-    output_embedding_size = config.hidden_size
+    if args.model_type == 'bert':
+        config = BertConfig.from_pretrained(args.model_name_or_path, gradient_checkpointing=False)
+        model = BertDot.from_pretrained(args.model_name_or_path, config=config, use_mean=args.use_mean, use_cos=args.use_cos)
+        output_embedding_size = config.hidden_size
+    elif args.model_type == 'roberta':
+        config = RobertaConfig.from_pretrained(args.model_name_or_path, gradient_checkpointing=False)
+        model = RobertaDot.from_pretrained(args.model_name_or_path, config=config)
+        output_embedding_size = config.hidden_size
+    elif args.model_type == 't5':
+        pretrained_model = T5EncoderModel.from_pretrained(args.model_name_or_path)
+        model = T5Dot(pretrained_model, use_mean=args.use_mean, use_cos=args.use_cos)
+        output_embedding_size = pretrained_model.config.d_model
+    
     model = model.to(args.device)
     query_inference(model, args, output_embedding_size)
     doc_inference(model, args, output_embedding_size)
@@ -72,22 +82,25 @@ def gen_static_hardnegs(args):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--data_type", choices=["passage", 'doc', 'nq320k'], type=str, required=True)
+    parser.add_argument("--data_type", type=str, required=True)
+    parser.add_argument("--model_type", type=str, choices=['t5', 'bert', 'roberta'],required=True)
+    parser.add_argument("--model_name_or_path", type=str, required=True)
+    parser.add_argument("--run_name", type=str, required=True)
     parser.add_argument("--max_query_length", type=int, default=32)
     parser.add_argument("--max_doc_length", type=int, default=512)
     parser.add_argument("--eval_batch_size", type=int, default=128)
     parser.add_argument("--mode", type=str, choices=["train", "dev", "test", "lead"], required=True)
     parser.add_argument("--topk", type=int, default=200)
     parser.add_argument("--not_faiss_cuda", action="store_true")
+    parser.add_argument("--use_mean", action="store_true")
+    parser.add_argument("--use_cos", action="store_true")
     args = parser.parse_args()
 
     args.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     args.n_gpu = torch.cuda.device_count()
     
-    args.preprocess_dir = f"./data/{args.data_type}_sbert/preprocess"
-    # args.model_path = f"./data/{args.data_type}/warmup"
-    args.model_path = f"sentence-transformers/msmarco-bert-base-dot-v5"
-    args.output_dir = f"./data/{args.data_type}_sbert/warmup_retrieve"
+    args.preprocess_dir = f"./data/{args.data_type}_{args.run_name}/preprocess"
+    args.output_dir = f"./data/{args.data_type}_{args.run_name}/warmup_retrieve"
     args.label_path = os.path.join(args.preprocess_dir, f"{args.mode}-qrel.tsv")
 
     args.query_memmap_path = os.path.join(args.output_dir, f"{args.mode}-query.memmap")

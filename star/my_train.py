@@ -9,12 +9,14 @@ from dataclasses import dataclass, field
 import transformers
 from transformers import (
     BertConfig,
+    RobertaConfig,
+    T5EncoderModel,
     HfArgumentParser,
     TrainingArguments,
     set_seed,
 )
 from transformers.integrations import TensorBoardCallback
-from model import BertDot_InBatch
+from model import BertDot_InBatch, T5Dot_InBatch, RobertaDot_InBatch
 from dataset import TextTokenIdsCache, load_rel
 from dataset import (
     TrainInbatchDataset, 
@@ -38,14 +40,6 @@ from lamb import Lamb
 
 os.environ["WANDB_DISABLED"] = "true"
 logger = logging.Logger(__name__)
-
-
-class MyTrainerCallback(TrainerCallback):
-    def on_epoch_end(self, args: TrainingArguments, state: TrainerState, control: TrainerControl, **kwargs):
-        """
-        Event called at the end of an epoch.
-        """
-        control.should_save = True
 
 
 class DRTrainer(Trainer):
@@ -90,11 +84,6 @@ class DRTrainer(Trainer):
             )
     
 
-class MyTensorBoardCallback(TensorBoardCallback):
-    def on_train_begin(self, args, state, control, **kwargs):
-        pass
-
-
 def is_main_process(local_rank):
     return local_rank in [-1, 0]
 
@@ -111,6 +100,9 @@ class DataTrainingArguments:
 class ModelArguments:
     init_path: str = field() # please use bm25 warmup model or roberta-base
     my_gradient_checkpointing: bool = field(default=False)
+    model_type: str = field(default="bert")
+    use_mean: bool = field(default=False)
+    use_cos: bool = field(default=False)
 
 
 @dataclass
@@ -189,16 +181,10 @@ def main():
     # Set seed before initializing model.
     set_seed(training_args.seed)
 
-    config = BertConfig.from_pretrained(
-        model_args.init_path,
-        finetuning_task="msmarco",
-        gradient_checkpointing=model_args.my_gradient_checkpointing
-    )
     tokenizer = AutoTokenizer.from_pretrained(
         model_args.init_path,
         use_fast=False,
     )
-    config.gradient_checkpointing = model_args.my_gradient_checkpointing
     
     data_args.label_path = os.path.join(data_args.preprocess_dir, "train-qrel.tsv")
     rel_dict = load_rel(data_args.label_path)
@@ -214,13 +200,37 @@ def main():
     data_collator = triple_get_collate_function(
         data_args.max_query_length, data_args.max_doc_length,
         rel_dict=rel_dict, padding=training_args.padding)
-    model_class = BertDot_InBatch
-
-    model = model_class.from_pretrained(
-        model_args.init_path,
-        config=config,
-        use_mean=True,
-    )
+    
+    if model_args.model_type == 'bert':
+        config = BertConfig.from_pretrained(
+            model_args.init_path,
+            gradient_checkpointing=model_args.my_gradient_checkpointing
+        )
+        config.gradient_checkpointing = model_args.my_gradient_checkpointing
+        model = BertDot_InBatch.from_pretrained(
+            model_args.init_path,
+            config=config,
+            use_mean=model_args.use_mean,
+            use_cos=model_args.use_cos,
+        )
+    elif model_args.model_type == 'roberta': 
+        config = RobertaConfig.from_pretrained(
+            model_args.init_path,
+            gradient_checkpointing=model_args.my_gradient_checkpointing
+        )
+        config.gradient_checkpointing = model_args.my_gradient_checkpointing
+        model = RobertaDot_InBatch.from_pretrained(
+            model_args.init_path,
+            config=config,
+        )
+    elif model_args.model_type == 't5':
+        pretrained_model = T5EncoderModel.from_pretrained(model_args.init_path)
+        pretrained_model.config.gradient_checkpointing = model_args.my_gradient_checkpointing
+        model = T5Dot_InBatch(
+            pretrained_model, 
+            use_mean=model_args.use_mean,
+            use_cos=model_args.use_cos,
+        )
     
     # Initialize our Trainer
     trainer = DRTrainer(
@@ -233,9 +243,6 @@ def main():
         data_collator=data_collator,
     )
     trainer.remove_callback(TensorBoardCallback)
-    # trainer.add_callback(MyTensorBoardCallback(
-    #    tb_writer=SummaryWriter(os.path.join(training_args.output_dir, "log"))))
-    trainer.add_callback(MyTrainerCallback())
 
     # Training
     trainer.train()

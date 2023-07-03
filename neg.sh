@@ -1,0 +1,11 @@
+CUDA_VISIBLE_DEVICES=1 python ./star/hardneg.py \
+    --data_type nq320k \
+    --max_query_length 64 \
+    --max_doc_length 512 \
+    --mode train \
+    --topk 200 \
+    --model_type t5 \
+    --run_name gtrt5 \
+    --model_name_or_path sentence-transformers/gtr-t5-base \
+    --use_mean \
+    --eval_batch_size 256
